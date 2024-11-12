@@ -6,6 +6,8 @@ import torch
 import time
 import numpy  as np
 
+from .utils import *
+
 class Predictor:
     """
     Unified class to call model / metric and do not put model code into beam search code

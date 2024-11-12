@@ -44,6 +44,9 @@ import torch
 import time
 import numpy  as np
 
+from .utils     import *
+from .predictor import *
+
 class CayleyGraph:
     """
     class to encapsulate all of permutation group in one place
