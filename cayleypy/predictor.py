@@ -2,6 +2,10 @@
 # any object having method "predict" or "__call__" (this means instance can be used as a function name) could be used as a predictor
 # torch.jit.load usage is a legacy and would be deprecated in a future
 
+import torch
+import time
+import numpy  as np
+
 class Predictor:
     """
     Unified class to call model / metric and do not put model code into beam search code

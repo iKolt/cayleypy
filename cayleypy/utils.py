@@ -2,6 +2,10 @@
 # 1. Not depending on cayley_group or predictor as a class
 # 2. useful in many cases
 
+import torch
+import time
+import numpy  as np
+
 def setup_of_random(seed=None, border=2**32, verbose=0):
     """
     Explicit set of random seed. Works for CPU/GPU

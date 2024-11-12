@@ -40,6 +40,10 @@
 # 1. Модель тянет к собранному состоянию, а можно добавить метрику, чтобы она "толкала" от стартового состояния
 # 2. Если мы застряли в лок.минимуме, можно поменять objective и временно (N шагов или до порога) двигаться к максимумам луча, а потом снова к минимумам
 
+import torch
+import time
+import numpy  as np
+
 class CayleyGraph:
     """
     class to encapsulate all of permutation group in one place
