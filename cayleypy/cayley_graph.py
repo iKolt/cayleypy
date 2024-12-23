@@ -1,4 +1,4 @@
-### main class for beam search
+ ### main class for beam search
 
 ### TODO
 # после инциализации , какие функции 
@@ -59,6 +59,8 @@ class CayleyGraph:
                  state_destination = 'Auto',
                  
                  vec_hasher        = 'Auto',
+
+                 to_power          = 1.6   ,
                  
                  device            = 'Auto',
                  dtype             = 'Auto',
@@ -138,6 +140,8 @@ class CayleyGraph:
         self.predictor = None
         
         self.define_make_hashes()
+
+        self.manhatten_moves_matrix_count(to_power=to_power)
         
     ################################################################################################################################################################################################################################################################################
     
@@ -1707,6 +1711,111 @@ class CayleyGraph:
                 rh0 = [q for q in rh1]
             print(end='@')
         return rs1, rh1
+    ################################################################################################################################################################################################################################################################################
+    def manhatten_moves_matrix_count(self, steps = 10, bad = 1000, to_power = 1.6):
+        prms = []
+        dsts = []
+        
+        _prm = get_neighbors2(self.state_destination, self.tensor_generators)
+    
+        _prm = torch.vstack([self.state_destination                                        , _prm                                                                      ,])
+        _dst = torch.hstack([torch.tensor(0, dtype=self.dtype_for_dist, device=self.device), torch.ones_like(_prm[1:,0], dtype=self.dtype_for_dist, device=self.device),])
+    
+        idx = torch.zeros_like(_dst, dtype=torch.bool)
+        
+        for j in range(_prm.shape[1]):
+            idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
+        
+        _prm = _prm[idx, :]
+        _dst = _dst[idx   ]
+    
+        prms.append( _prm[0:1,:] )
+        prms.append( _prm[1: ,:] )
+    
+        dsts.append( _dst[0:1  ] )
+        dsts.append( _dst[1:   ] )
+    
+        for i in range(0, steps):
+            print(prms[-1].shape)
+            ### 1
+            _prm = get_neighbors2(prms[-1], self.tensor_generators)
+    
+            _dst = torch.ones_like(_prm[:,0], dtype=self.dtype_for_dist, device=_dst.device)*(i+2)
+        
+            idx = torch.zeros_like(_dst, dtype=torch.bool)
+            
+            for j in range(_prm.shape[1]):
+                idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
+            
+            _prm = _prm[idx, :]
+            _dst = _dst[idx   ]
+    
+            ### 2
+            _prm = torch.vstack([torch.vstack(prms), _prm])
+            _dst = torch.hstack([torch.hstack(dsts), _dst])
+            idx  = torch.zeros_like(_dst, dtype=torch.bool)
+            
+            for j in range(_prm.shape[1]):
+                idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
+            
+            _prm = _prm[idx, :][torch.vstack(prms).shape[0]:,:]
+            _dst = _dst[idx   ][torch.hstack(dsts).shape[0]:  ]
+    
+            if _prm.shape[0] == 0:
+                break
+        
+            prms.append( _prm )
+            dsts.append( _dst )
+    
+        #return torch.vstack(prms), torch.hstack(dsts)
+    
+        _prm = torch.vstack(prms)
+        _dst = torch.hstack(dsts)
+    
+        _vls = torch.ones( (_prm.shape[1],_prm.max()+1), dtype=torch.int64, device=self.device )*bad
+        
+        for i in range(_prm.shape[0]):
+            for j in range(_prm.shape[1]):
+                k = _prm[i,j].item()
+                if _vls[j,k] == bad:
+                    _vls[j,k] = _dst[i].item()
+
+        self._vls = _vls**to_power
+    
+        return _vls
+    ################################################################################################################################################################################################################################################################################
+    def group_data_0w(self, data):
+        return torch.sum(torch.stack([((data==j)*self._vls[:,j]) for j in range(self._vls.shape[1])]), dim=0)
+    ################################################################################################################################################################################################################################################################################
+    def pairwise_cmp(self, A, B, p=1, max_moves=None, A_size_thresh = 100):
+        def tensor_split_preprocessed(M, thres):
+            if M.shape[0]>thres:
+                chunks = (M.shape[0]//thres) + 1 - (M.shape[0]%thres == 0)
+                return torch.tensor_split(M, chunks)
+            return [M,]
+
+        #if max_moves is None:
+        #    max_moves = self._vls.max().item()
+            
+        out_v = None
+        out_i = None
+        for AC in tensor_split_preprocessed(A, A_size_thresh):
+            gd0A = self.group_data_0w(AC).to(torch.float)
+            gd0B = self.group_data_0w(B ).to(torch.float)
+    
+            # 3
+            res  = (gd0A == 0).to(torch.float) @ (gd0B.T != 0).to(torch.float)
+            for i in torch.unique(perm_group_444._vls.flatten()):#range(1,max_moves+1):
+                if i > 0:
+                    res += (gd0A == i).to(torch.float) @ (gd0B.T != i).to(torch.float)
+    
+            v, i = res.min(dim=1)
+            
+            out_v = torch.hstack([out_v, v]) if out_v is not None else v
+            out_i = torch.hstack([out_i, i]) if out_i is not None else i
+    
+        return out_v, out_i
+    ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
