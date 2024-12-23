@@ -1712,7 +1712,13 @@ class CayleyGraph:
             print(end='@')
         return rs1, rh1
     ################################################################################################################################################################################################################################################################################
-    def manhatten_moves_matrix_count(self, steps = 10, bad = 1000, to_power = 1.6):
+    def manhatten_moves_matrix_count(self, steps = 10, bad = 1000, to_power = None, value_dict = None):
+        if to_power is not None and value_dict is not None:
+            print("value_dict will be ignored because to_power is not None")
+        if value_dict is None:
+            if to_power is None:
+                to_power = 1.6
+                
         prms = []
         dsts = []
         
@@ -1736,7 +1742,7 @@ class CayleyGraph:
         dsts.append( _dst[1:   ] )
     
         for i in range(0, steps):
-            print(prms[-1].shape)
+            #print(prms[-1].shape)
             ### 1
             _prm = get_neighbors2(prms[-1], self.tensor_generators)
     
@@ -1787,12 +1793,10 @@ class CayleyGraph:
     def group_data_0w(self, data):
         return torch.sum(torch.stack([((data==j)*self._vls[:,j]) for j in range(self._vls.shape[1])]), dim=0)
     ################################################################################################################################################################################################################################################################################
+    def group_data_1(self, data):
+        return torch.sum(torch.stack([((data==j)*self._vls[:,j]) for j in range(self._vls.shape[1])]), dim=0).sum(dim=1)
+    ################################################################################################################################################################################################################################################################################
     def pairwise_cmp(self, A, B, p=1, max_moves=None, A_size_thresh = 100):
-        def tensor_split_preprocessed(M, thres):
-            if M.shape[0]>thres:
-                chunks = (M.shape[0]//thres) + 1 - (M.shape[0]%thres == 0)
-                return torch.tensor_split(M, chunks)
-            return [M,]
 
         #if max_moves is None:
         #    max_moves = self._vls.max().item()
