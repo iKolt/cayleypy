@@ -1786,7 +1786,14 @@ class CayleyGraph:
                 if _vls[j,k] == bad:
                     _vls[j,k] = _dst[i].item()
 
-        self._vls = _vls**to_power
+        if to_power is not None:
+            self._vls = _vls**to_power
+        elif value_dict is not None:
+            self._vls = torch.zeros_like(_vls)
+            for k,v in value_dict.items():
+                self._vls += (_vls == k)*v
+        else:
+            self._vls = _vls
     
         return _vls
     ################################################################################################################################################################################################################################################################################
