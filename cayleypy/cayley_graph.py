@@ -85,7 +85,7 @@ class CayleyGraph:
         if isinstance(generators, list):
             self.list_generators = generators
         elif isinstance(generators, torch.Tensor ):
-            self.list_generators = [list(generators[i,:]) for i in range(generators.shape[0] ) ]       
+            self.list_generators = [[q.item() for q in generators[i,:]] for i in range(generators.shape[0] ) ]       
         elif isinstance(generators, np.ndarray ):
             self.list_generators = [list(generators[i,:]) for i in range(generators.shape[0] ) ]
         else:
