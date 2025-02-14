@@ -106,6 +106,8 @@ class CayleyGraph:
                 self.dtype = torch.uint8
             else:
                 self.dtype = torch.uint16
+        elif dtype is not None:
+            self.dtype = dtype
                 
         self.dtype_generators = torch.int64                                                 # torch.gather raises error if generators aren't long tensor
         #self.dtype_for_hash   = torch.float64 if torch.cuda.is_available() else torch.int64 # less makes collisions much more probable
@@ -474,6 +476,7 @@ class CayleyGraph:
                                         # backtracking params           
                                         n_steps_to_ban_backtracking     = 8     ,
                                         flag_empty_backtracking_list    = False ,
+                                        flag_ban_all_seen_states        = False ,
                                        
                                         # retry params
                                         n_attempts_limit                = 3     ,
@@ -639,8 +642,10 @@ class CayleyGraph:
             hashes_stagnation       = torch.zeros(4, beam_width, dtype=self.dtype_for_hash, device=self.device)
             states_bad_hashed       = torch.zeros(1, beam_width, dtype=self.dtype_for_hash, device=self.device)
 
-        if n_steps_to_ban_backtracking > 0:
-            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking, beam_width), dtype=self.dtype_for_hash, device=self.device)
+        if   n_steps_to_ban_backtracking > 0 and not flag_ban_all_seen_states:
+            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking                    , beam_width), dtype=self.dtype_for_hash, device=self.device)
+        elif n_steps_to_ban_backtracking > 0 and     flag_ban_all_seen_states:
+            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking * self.n_generators, beam_width), dtype=self.dtype_for_hash, device=self.device)
 
         ##########################################################################################
         # Loop over attempts (restarts)
@@ -703,7 +708,10 @@ class CayleyGraph:
 
             if n_steps_to_ban_backtracking > 0:
                 if flag_empty_backtracking_list:
-                    hashes_previous_n_steps = torch.zeros(n_steps_to_ban_backtracking, beam_width).to(self.device)
+                    if   not flag_ban_all_seen_states:
+                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking                    , beam_width), dtype=self.dtype_for_hash, device=self.device)
+                    elif     flag_ban_all_seen_states:
+                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking * self.n_generators, beam_width), dtype=self.dtype_for_hash, device=self.device)
 
                 hashes_previous_n_steps[0,:len(hashed_start)] = hashed_start
 
@@ -770,6 +778,9 @@ class CayleyGraph:
 
                 if do_check_stagnation and (states_bad_hashed!=0).sum()>0:
                     mask                      &= ~torch.isin(hashes_array_of_states_new, states_bad_hashed[states_bad_hashed!=0], assume_unique=True)
+
+                if n_steps_to_ban_backtracking > 0 and     flag_ban_all_seen_states:
+                    hashes_previous_n_steps[i_step    % n_steps_to_ban_backtracking, :len(hashes_previous)] = hashes_array_of_states_new
 
                 _ms = mask.sum()
                 if _ms<mask.shape[0]:
@@ -901,7 +912,7 @@ class CayleyGraph:
 
                 free_memory_func()
 
-                if n_steps_to_ban_backtracking > 0:
+                if n_steps_to_ban_backtracking > 0 and not flag_ban_all_seen_states:
                     #hashes_previous_n_steps[i_step    % n_steps_to_ban_backtracking, :] = 0 # turned off but saved for simplicity
                     hashes_previous_n_steps[i_step    % n_steps_to_ban_backtracking, :len(hashes_previous)] = hashes_previous
 
@@ -1013,6 +1024,7 @@ class CayleyGraph:
                                         # backtracking params           
                                         n_steps_to_ban_backtracking     = 8     ,
                                         flag_empty_backtracking_list    = False ,
+                                        #flag_ban_all_seen_states        = False , # must be added later
                                        
                                         # retry params
                                         n_attempts_limit                = 3     ,
