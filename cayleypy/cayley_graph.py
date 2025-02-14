@@ -105,7 +105,7 @@ class CayleyGraph:
             if n_unique_symbols_in_states <= 256:
                 self.dtype = torch.uint8
             else:
-                self.dtype = torch.uint16
+                self.dtype = torch.int32#uint16
         elif dtype is not None:
             self.dtype = dtype
                 
