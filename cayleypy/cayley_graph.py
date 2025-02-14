@@ -780,7 +780,7 @@ class CayleyGraph:
                     mask                      &= ~torch.isin(hashes_array_of_states_new, states_bad_hashed[states_bad_hashed!=0], assume_unique=True)
 
                 if n_steps_to_ban_backtracking > 0 and     flag_ban_all_seen_states:
-                    hashes_previous_n_steps[i_step    % n_steps_to_ban_backtracking, :len(hashes_previous)] = hashes_array_of_states_new
+                    hashes_previous_n_steps[i_step    % n_steps_to_ban_backtracking, :len(hashes_array_of_states_new)] = hashes_array_of_states_new
 
                 _ms = mask.sum()
                 if _ms<mask.shape[0]:
