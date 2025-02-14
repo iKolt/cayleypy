@@ -643,9 +643,9 @@ class CayleyGraph:
             states_bad_hashed       = torch.zeros(1, beam_width, dtype=self.dtype_for_hash, device=self.device)
 
         if   n_steps_to_ban_backtracking > 0 and not flag_ban_all_seen_states:
-            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking                    , beam_width), dtype=self.dtype_for_hash, device=self.device)
+            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking, beam_width                    ), dtype=self.dtype_for_hash, device=self.device)
         elif n_steps_to_ban_backtracking > 0 and     flag_ban_all_seen_states:
-            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking * self.n_generators, beam_width), dtype=self.dtype_for_hash, device=self.device)
+            hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking, beam_width * self.n_generators), dtype=self.dtype_for_hash, device=self.device)
 
         ##########################################################################################
         # Loop over attempts (restarts)
@@ -709,9 +709,9 @@ class CayleyGraph:
             if n_steps_to_ban_backtracking > 0:
                 if flag_empty_backtracking_list:
                     if   not flag_ban_all_seen_states:
-                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking                    , beam_width), dtype=self.dtype_for_hash, device=self.device)
+                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking, beam_width                    ), dtype=self.dtype_for_hash, device=self.device)
                     elif     flag_ban_all_seen_states:
-                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking * self.n_generators, beam_width), dtype=self.dtype_for_hash, device=self.device)
+                        hashes_previous_n_steps = torch.zeros((n_steps_to_ban_backtracking, beam_width * self.n_generators), dtype=self.dtype_for_hash, device=self.device)
 
                 hashes_previous_n_steps[0,:len(hashed_start)] = hashed_start
 
