@@ -43,17 +43,9 @@
 import torch
 import time
 import numpy  as np
-from dataclasses import dataclass
 
 from .utils     import *
 from .predictor import *
-
-
-@dataclass
-class BfsGrowthResult:
-    layer_sizes: list[int]  # i-th element is number of states at distance i from start.
-    diameter: int  # Maximal distance from start to some state (=len(layer_sizes)).
-    last_layer: torch.Tensor  # States at maximal distance from start.
 
 class CayleyGraph:
     """
@@ -62,24 +54,24 @@ class CayleyGraph:
     """
     ################################################################################################################################################################################################################################################################################
     def __init__(self,
-
+                 
                  generators                ,
                  state_destination = 'Auto',
-
+                 
                  vec_hasher        = 'Auto',
 
                  to_power          = 1.6   ,
-
+                 
                  device            = 'Auto',
                  dtype             = 'Auto',
                  random_seed       = 'Auto' ):
-
+        
         # determine random seed
         if random_seed == 'Auto':
             setup_of_random()
         else:
             setup_of_random(random_seed)
-
+        
         # it's better for speed to store all data in the same device
         if device == 'Auto':
             if torch.cuda.is_available():
@@ -88,27 +80,27 @@ class CayleyGraph:
                 self.device = torch.device("cpu")
         else:
             self.device = device
-
+            
         # generators as a list
         if isinstance(generators, list):
             self.list_generators = generators
         elif isinstance(generators, torch.Tensor ):
-            self.list_generators = [[q.item() for q in generators[i,:]] for i in range(generators.shape[0] ) ]
+            self.list_generators = [[q.item() for q in generators[i,:]] for i in range(generators.shape[0] ) ]       
         elif isinstance(generators, np.ndarray ):
             self.list_generators = [list(generators[i,:]) for i in range(generators.shape[0] ) ]
         else:
             print('Unsupported format for "generators"', type(generators), generators)
-            raise ValueError('Unsupported format for "generators" ' + str(type(generators)) )
-
+            raise ValueError('Unsupported format for "generators" ' + str(type(generators)) )    
+        
         self.state_size        = len(self.list_generators[0])
         self.n_generators      = len(self.list_generators   )
-
+        
         # dtype 
         if state_destination == 'Auto':
             n_unique_symbols_in_states = self.state_size
         else:
             n_unique_symbols_in_states = len(set( [int(i) for i in state_destination ]  ))
-
+        
         if dtype == 'Auto':
             if n_unique_symbols_in_states <= 256:
                 self.dtype = torch.uint8
@@ -116,28 +108,28 @@ class CayleyGraph:
                 self.dtype = torch.int32#uint16
         elif dtype is not None:
             self.dtype = dtype
-
+                
         self.dtype_generators = torch.int64                                                 # torch.gather raises error if generators aren't long tensor
         #self.dtype_for_hash   = torch.float64 if torch.cuda.is_available() else torch.int64 # less makes collisions much more probable
         # float64 on old models of CUDA - it's a dirty trick but it helps to work really fast
         # possibly can be set to torch.float64 even for CPU and modern GPU
-
+        
         self.dtype_for_hash   = torch.int64 # torch.float64 seems to be erroneus for hashing
 
         self.dtype_for_dist   = torch.int16
-
+        
         # generators as a tensor
         self.tensor_generators = torch.tensor(   self.list_generators       , device = self.device, dtype = self.dtype_generators, )
         self.generators_dists  = torch.ones_like(self.tensor_generators[:,0], device = self.device, dtype = self.dtype_generators, )
-
+        
         if state_destination == 'Auto':
             self.state_destination = torch.arange( self.state_size, device=self.device, dtype = self.dtype).reshape(-1,self.state_size)
         elif isinstance(state_destination, torch.Tensor ):
             self.state_destination =  state_destination.to(self.device).to(self.dtype).reshape(-1,self.state_size)
         else:
             self.state_destination = torch.tensor( state_destination, device=self.device, dtype = self.dtype).reshape(-1,self.state_size)
-
-
+            
+        
         if vec_hasher == 'Auto':
             # Hash vector generation
             max_int =  int( (2**62) )
@@ -146,17 +138,17 @@ class CayleyGraph:
             self.vec_hasher = torch.tensor( vec_hasher , device=self.device, dtype=self.dtype_for_hash )
         else:
             self.vec_hasher = vec_hasher.to(self.device).to(self.dtype_for_hash)
-
+            
         self.predictor = None
-
+        
         self.define_make_hashes()
 
         self.manhatten_moves_matrix_count(to_power=to_power)
-
+        
     ################################################################################################################################################################################################################################################################################
-
+    
     # bit of setup to get the fastest make_hashes - now it's possible always make_hashes_cpu_and_modern_gpu because of using float64 for self.dtype_for_hash
-
+    
     def define_make_hashes(self):
         try:
             _ = self.make_hashes_cpu_and_modern_gpu( torch.vstack([self.state_destination,
@@ -164,7 +156,7 @@ class CayleyGraph:
             self.make_hashes = self.make_hashes_cpu_and_modern_gpu
         except Exception as e:
             self.make_hashes = self.make_hashes_older_gpu
-
+    
     def make_hashes_cpu_and_modern_gpu(self, states: torch.Tensor, chunk_size_thres=2**18):
         #if states.shape[0]>chunk_size_thres:
         #    chunk_size = states.shape[0]//8+1 # 8 because we're creating about 8bytes for each row of input
@@ -176,7 +168,7 @@ class CayleyGraph:
         #    result = states.to(self.dtype_for_hash) @ self.vec_hasher.mT
         #return result
         return states.to(self.dtype_for_hash) @ self.vec_hasher.mT if states.shape[0]<=chunk_size_thres else torch.hstack([(z.to(self.dtype_for_hash) @ self.vec_hasher.reshape((-1,1))).flatten() for z in torch.tensor_split(states,8)])
-
+    
     def make_hashes_older_gpu(self, states: torch.Tensor, chunk_size_thres=2**18):
         #if states.shape[0]>chunk_size_thres:
         #    chunk_size = states.shape[0]//8+1 # 8 because we're creating about 8bytes for each row of input
@@ -186,16 +178,16 @@ class CayleyGraph:
         #        result[i:i+_sz] = torch.sum( torch.narrow(states, 0, i, _sz).to(self.dtype_for_hash) * self.vec_hasher, dim=1)
         #else:
         #    result = torch.sum( states.to(self.dtype_for_hash) * self.vec_hasher, dim=1)
-        #return result
+        #return result 
         return torch.sum( states * self.vec_hasher, dim=1) if states.shape[0]<=chunk_size_thres else torch.hstack([torch.sum( z * self.vec_hasher, dim=1) for z in torch.tensor_split(states,8)])
-                                                            # Compute hashes.
-                                                            # It is same as matrix product torch.matmul(hash_vec , states )
-                                                            # but pay attention: such code work with GPU for integers
-                                                            # While torch.matmul - does not work for GPU for integer data types,
+                                                            # Compute hashes. 
+                                                            # It is same as matrix product torch.matmul(hash_vec , states ) 
+                                                            # but pay attention: such code work with GPU for integers 
+                                                            # While torch.matmul - does not work for GPU for integer data types, 
                                                             # since old GPU hardware (before 2020: P100, T4) does not support integer matrix multiplication
-
+            
     ################################################################################################################################################################################################################################################################################
-    def get_unique_states_2( self, states: torch.Tensor, flag_already_hashed : bool = False ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def get_unique_states_2( self, states: torch.Tensor, flag_already_hashed : bool = False ) -> torch.Tensor:
         '''
         Return matrix with unique rows for input matrix "states" 
         I.e. duplicate rows are dropped.
@@ -223,7 +215,7 @@ class CayleyGraph:
         IX1 = idx[mask]
 
         return states[IX1], hashed[IX1], IX1
-
+    
     ################################################################################################################################################################################################################################################################################
     def get_neighbors_chunked_iterator( self, states, moves, states_attributes=None, moves_attributes=None, chunking_thres=2**18 ):
         """
@@ -248,7 +240,7 @@ class CayleyGraph:
             neighbs_hashes, idx = self.make_hashes(neighbs).sort(stable=True)
             neighbs_attributes  = states_attributes.repeat(moves.shape[0], 1).T.flatten() +\
                                   moves_attributes .repeat(1,states.shape[0]).T.flatten()
-
+            
             yield neighbs[idx, :], neighbs_hashes, neighbs_attributes[idx]
 #         if chunk_size_states == -1:
 #             chunk_size_states = states.shape[0]
@@ -293,25 +285,25 @@ class CayleyGraph:
             stopping_criteria_hashed,_ = stopping_criteria_hashed.sort(stable=True)
 
 #         for _, neighbs_hashes, neighbs_dists in self.get_neighbors_chunked_iterator(states,
-#                                                                                     moves,
-#                                                                                     states_attributes = states_distances ,
-#                                                                                     moves_attributes  = moves_distances  ,
+#                                                                                     moves, 
+#                                                                                     states_attributes = states_distances , 
+#                                                                                     moves_attributes  = moves_distances  , 
 #                                                                                     #chunk_size_states = chunk_size_states
 #                                                                                    ):
         chunking_thres = 2**18
-        if states.shape[0] > chunking_thres//moves.shape[0]:
+        if states.shape[0] > chunking_thres//moves.shape[0]:            
             stop_hashes = []
             stop_dists  = []
-
+            
             for i in range(0,moves.shape[0]):
                 neighbs_hashes, idx = self.make_hashes(get_neighbors_plain(states, torch.narrow(moves, 0, i, 1))).sort(stable=True)#moves[i:i+1,:])).sort(stable=True) # not doing dedup, but in one chunk all states are unique#torch.narrow(moves, 0, i, 1)) #moves[i:i+1,:])
                 neighbs_dists       = (states_distances + moves_distances[i])[idx]
-
+                
                 mask = isin_via_searchsorted(neighbs_hashes.flatten(), stopping_criteria_hashed) # torch.isin(neighbs_hashes.flatten(), stopping_criteria_hashed, assume_unique=True)
                 if mask.any():
                     stop_hashes.append(neighbs_hashes[mask])
                     stop_dists .append(neighbs_dists [mask])
-
+            
             if len(stop_hashes)>0:# is not None:
                 stop_hashes = torch.hstack(stop_hashes)
                 stop_dists  = torch.hstack(stop_dists )
@@ -322,12 +314,12 @@ class CayleyGraph:
             mask = isin_via_searchsorted(neighbs_hashes.flatten(), stopping_criteria_hashed)
             stop_hashes = neighbs_hashes[mask]
             stop_dists  = neighbs_dists [mask]
-
+            
         if len(stop_hashes)>0:# is not None:
-
+            
             # if we got to some state by different moves - we must preserve the shortest of paths
             stop_dists, idx = stop_dists.sort(stable=True)
-
+            
             # looks like it's better to deduplicate, not the isin_via_searchsorted (it's useful in beam search that we have only one instance of each hash)                           
             _, stop_hashes, idxs = self.get_unique_states_2(stop_hashes[idx], True)
 
@@ -384,7 +376,7 @@ class CayleyGraph:
             all_dists[all_hashes==id_hash] = 0
 
         return all_states, all_hashes, all_dists
-
+    
     ################################################################################################################################################################################################################################################################################
     def explode_moves_no_states( self, moves, start_states = None, radius=1, initial_distance=1, flag_skip_identity = True ):
         """
@@ -429,7 +421,7 @@ class CayleyGraph:
             all_dists[all_hashes==id_hash] = 0
 
         return all_hashes, all_dists
-
+    
     ################################################################################################################################################################################################################################################################################
     def register_predictor(self, models_or_heuristics, batching = False, lazy = True, verbose = 0):
         """
@@ -453,23 +445,23 @@ class CayleyGraph:
 
     ################################################################################################################################################################################################################################################################################
     def beam_search_permutations_torch( self                                    ,
-
+                                       
                                         state_start                             ,
-
+                                        
                                         # model, if not registered
                                         models_or_heuristics            = None  ,
                                         models_or_heuristics_batching   = True  ,            # better not to change
                                         models_or_heuristics_lazy       = True  ,            # better not to change
                                         models_or_heuristics_need_state_destination = False, # better not to change
-                                                                                             # models_or_heuristics_bla_bla_bla vars are not a best solution and mb will be changed in future
+                                                                                             # models_or_heuristics_bla_bla_bla vars are not a best solution and mb will be changed in future 
                                         # main params
                                         beam_width                      = 1_000 ,
                                         n_steps_limit                   = 1_000 ,
-
+                                        
                                         # if do many basic moves in one step params
-                                        n_step_size                     = 1     ,
+                                        n_step_size                     = 1     , 
                                         n_beam_candidate_states         = 'Auto',
-
+                                       
                                         # bi-bfs params
                                         radius_destination_neigbourhood = 5     ,
                                         radius_beam_neigbourhood        = 0     ,
@@ -480,18 +472,18 @@ class CayleyGraph:
                                         temperature                     = 0.01   ,
                                         temperature_decay               = 0.95  ,
                                         alpha_past_states_attenuation   = 0.2   ,
-
-                                        # backtracking params
+                                        
+                                        # backtracking params           
                                         n_steps_to_ban_backtracking     = 8     ,
                                         flag_empty_backtracking_list    = False ,
                                         flag_ban_all_seen_states        = False ,
-
+                                       
                                         # retry params
                                         n_attempts_limit                = 3     ,
                                         do_check_stagnation             = True  ,
                                         stagnation_steps                = 8     ,
                                         stagnation_thres                = 0.05  ,
-
+                                       
                                         # sprouting params
                                         n_random_start_steps            = 5     ,
 
@@ -501,18 +493,18 @@ class CayleyGraph:
                                         # diversity
                                         diversity_func                  = hamming_dist,
                                         diversity_weight                = 0.001 ,
-
+                                       
                                         # split_trajectories
                                         sub_ray_split                   = False ,
                                         flag_return_line_stat           = False ,
-
-                                        # Technical:
+                                       
+                                        # Technical: 
                                         random_seed                     = 'Auto',
                                         verbose                         = 0     ,
                                         print_min_each_step_no          = 0     ,
-
+                                         
                                         free_memory_func                = lambda: None, # can be free_memory
-
+                                       
                                         print_mode                      = None, # 'Beam stat each step'
                                       ):
         '''
@@ -618,13 +610,13 @@ class CayleyGraph:
         # r1-area of state_destination
         ##########################################################################################
 
-        if isinstance(radius_destination_neigbourhood, int):
+        if isinstance(radius_destination_neigbourhood, int): 
             dest_ahash, dest_dists = self.explode_moves_no_states( self.tensor_generators,
                                                                    start_states       = self.state_destination.reshape((-1,self.state_size)),
                                                                    initial_distance   = 0                                                   ,
                                                                    radius             = radius_destination_neigbourhood                     ,
                                                                    flag_skip_identity = False                                               )
-
+    
             dest_ahash, idx = dest_ahash.sort(stable=True)
             dest_dists      = dest_dists[idx]
         elif isinstance(radius_destination_neigbourhood, list) or isinstance(radius_destination_neigbourhood, tuple):
@@ -661,7 +653,7 @@ class CayleyGraph:
         for i_attempt in range(0, n_attempts_limit):
             if flag_found_destination:
                 break
-
+                
             if verbose>0:
                 print('>')
 
@@ -708,7 +700,7 @@ class CayleyGraph:
 
             # Initialize hashed history
             hashed_start = self.make_hashes( array_of_states )
-
+            
             hashes_to_sep_lines = torch.arange(len(hashed_start), device=self.device, dtype=torch.int32)
 
             if flag_path_return:
@@ -725,7 +717,7 @@ class CayleyGraph:
 
             if (self.device == torch.device("cuda")) : torch.cuda.synchronize()
 
-            free_memory_func()
+            free_memory_func()    
 
             ##########################################################################################
             # Main Loop over steps
@@ -760,7 +752,7 @@ class CayleyGraph:
                 free_memory_func()
 
                 if (verbose >= 1000 ) and (  self.device == torch.device("cuda")) : torch.cuda.synchronize()
-                t_moves += (time.time() - t1)
+                t_moves += (time.time() - t1)        
 
                 # Take only unique states 
                 # surprise: THAT IS CRITICAL for beam search performance !!!!
@@ -802,11 +794,11 @@ class CayleyGraph:
                         print('!', end='')
                     break
 
-                free_memory_func()
+                free_memory_func()    
 
                 # Check destination state found 
                 t1 = time.time()
-
+                
                 if (radius_beam_neigbourhood > 0) and (i_step >= mode_bibfs_checks[0]) and (i_step%mode_bibfs_checks[1] == 0):
                     reach_hashes, reach_dists = self.search_neighbors_for_destination_reach(array_of_states_new                                ,
                                                                                             rbfs_moves                                         ,
@@ -824,7 +816,7 @@ class CayleyGraph:
                         reach_dists  = array_of_states_dists     [mask]
                         flag_found_destination = True
 
-
+                    
                 free_memory_func()
 
                 if (verbose >= 1000 ) and (  self.device == torch.device("cuda")) : torch.cuda.synchronize()
@@ -850,7 +842,7 @@ class CayleyGraph:
                     # ok, this is a final distance
                     res_distance = (reach_df[0::2, 2]+reach_df[1::2, 2]).min() #i_step*n_step_size
                     if (verbose >= 10 ):
-                        print('Found destination state. ', 'i_step:', i_step, ' distance:', res_distance)
+                        print('Found destination state. ', 'i_step:', i_step, ' distance:', res_distance) 
                     break
 
                 free_memory_func()
@@ -864,18 +856,18 @@ class CayleyGraph:
                 estimations_for_new_states = self.predictor(array_of_states_new, self)
                 #print_estimations_for_new_states
                 if print_mode == 'Beam stat each step':
-                    if (i_step <100) or ( ((i_step % 10) == 0) and (i_step < 1000) )  or ( ((i_step % 100) == 0)  ):
-                        print('i_step:',i_step, 'Beam Min: %.6f'%torch.min(estimations_for_new_states).item(),'Max: %.6f'%torch.max(estimations_for_new_states).item(),
+                    if (i_step <100) or ( ((i_step % 10) == 0) and (i_step < 1000) )  or ( ((i_step % 100) == 0)  ): 
+                        print('i_step:',i_step, 'Beam Min: %.6f'%torch.min(estimations_for_new_states).item(),'Max: %.6f'%torch.max(estimations_for_new_states).item(), 
                               'Mean: %.6f'%torch.mean(estimations_for_new_states).item(),'Median: %.6f'%torch.median(estimations_for_new_states).item())
                 #print(    'All:', estimations_for_new_states)
                 estimate_min_on_ray        = estimations_for_new_states.min()#torch.minimum(estimate_min_on_ray, estimations_for_new_states.min())
-
+                
                 estimations_for_new_states = estimations_for_new_states - estimate_min_on_ray + 0.001
 
                 # diversity added V1
                 #if diversity_weight is not None:
                 #    diversity_addon        = diversity_func( array_of_states_new, array_of_states_new[estimations_for_new_states.argmin(),:].view((1,-1)) ) * diversity_weight
-
+                
                 # Take only "beam_width" of the best states (i.e. most nearest to destination according to the model estimate)
                 ### UPDATED - use softmax w temperature and naive sampling
 
@@ -901,7 +893,7 @@ class CayleyGraph:
                     idx1 = torch.arange(len(estimations_for_new_states))
 
                 idx = torch.argsort(estimations_for_new_states[idx0][idx1]+zeros_to_sep_lines, stable=True)[:beam_width]
-
+                
                 array_of_states       = array_of_states_new       [idx0,:][idx1,:][idx,:]
                 hashes_previous       = hashes_array_of_states_new[idx0  ][idx1  ][idx  ]
                 prev_states_eval      = prev_states_eval          [idx0  ][idx1  ][idx  ]
@@ -910,9 +902,9 @@ class CayleyGraph:
 
                 if flag_path_return:
                     dict_path[i_step] = hashes_previous.detach().cpu()
-
+                
                 distance_minimums = torch.hstack([distance_minimums, prev_states_eval.min(),])
-
+                
                 if print_min_each_step_no>0 and i_step%print_min_each_step_no == 0:
                     print(f'Min on ray: {estimate_min_on_ray}')
                     #if sub_ray_split:
@@ -960,19 +952,19 @@ class CayleyGraph:
                 t_estimate += (time.time() - t1)
                 t_all = (time.time() - t_all )
                 if verbose >= 1000:
-                    print(i_step,'i_step', 't_moves: %.5f, '%t_moves,  't_check: %.3f, '%t_check, 't_unique_els: %.3f, '%t_unique_els,
-                          't_estimate: %.5f, '%t_estimate,  't_all: %.3f, '%t_all,
+                    print(i_step,'i_step', 't_moves: %.5f, '%t_moves,  't_check: %.3f, '%t_check, 't_unique_els: %.3f, '%t_unique_els, 
+                          't_estimate: %.5f, '%t_estimate,  't_all: %.3f, '%t_all, 
                           array_of_states_new.shape, 'array_of_states_new.shape' )
                 elif verbose >= 10:
                     print(i_step,'i_step', 't_all: %.3f, '%t_all, array_of_states_new.shape, 'array_of_states_new.shape' )
 
         res_distance = res_distance.item() if res_distance is not None and flag_found_destination else i_step*n_step_size+(radius_destination_neigbourhood if isinstance(radius_destination_neigbourhood, int) else radius_destination_neigbourhood[0])+radius_beam_neigbourhood
 
-        dict_additional_data = {'random_seed':new_random_seed,}
+        dict_additional_data = {'random_seed':new_random_seed,}        
         if verbose >= 1:
             print();
             print('Search finished.', 'beam_width:', beam_width)
-            if flag_found_destination:
+            if flag_found_destination:    
                 print(res_distance, ' steps to destination state. Path found.')
             else:
                 print('Path not found.')
@@ -982,10 +974,10 @@ class CayleyGraph:
             dict_additional_data['path_states'] = result_states
             dict_additional_data['path_hashes'] = result_hashes
             #dict_additional_data['path'] = dict_path
-
+            
         if flag_return_line_stat:
             dict_additional_data['line_idxs'] = hashes_to_sep_lines
-
+            
         return flag_found_destination, res_distance, dict_additional_data
 #         except Exception as e:
 #             print(e)
@@ -998,26 +990,26 @@ class CayleyGraph:
 #         finally:
 #             free_memory()
 
-
+    
     ################################################################################################################################################################################################################################################################################
     def beam_search_permutations_torch_ME( self                                    ,
-
+                                       
                                         state_start                             ,
-
+                                        
                                         # model, if not registered
                                         models_or_heuristics            = None  ,
                                         models_or_heuristics_batching   = True  ,            # better not to change
                                         models_or_heuristics_lazy       = True  ,            # better not to change
                                         models_or_heuristics_need_state_destination = False, # better not to change
-                                                                                             # models_or_heuristics_bla_bla_bla vars are not a best solution and mb will be changed in future
+                                                                                             # models_or_heuristics_bla_bla_bla vars are not a best solution and mb will be changed in future 
                                         # main params
                                         beam_width                      = 1_000 ,
                                         n_steps_limit                   = 1_000 ,
-
+                                        
                                         # if do many basic moves in one step params
-                                        n_step_size                     = 1     ,
+                                        n_step_size                     = 1     , 
                                         n_beam_candidate_states         = 'Auto',
-
+                                       
                                         # bi-bfs params
                                         radius_destination_neigbourhood = 5     ,
                                         radius_beam_neigbourhood        = 0     ,
@@ -1028,18 +1020,18 @@ class CayleyGraph:
                                         temperature                     = 0.01   ,
                                         temperature_decay               = 0.95  ,
                                         alpha_past_states_attenuation   = 0.2   ,
-
-                                        # backtracking params
+                                        
+                                        # backtracking params           
                                         n_steps_to_ban_backtracking     = 8     ,
                                         flag_empty_backtracking_list    = False ,
                                         #flag_ban_all_seen_states        = False , # must be added later
-
+                                       
                                         # retry params
                                         n_attempts_limit                = 3     ,
                                         do_check_stagnation             = True  ,
                                         stagnation_steps                = 8     ,
                                         stagnation_thres                = 0.05  ,
-
+                                       
                                         # sprouting params
                                         n_random_start_steps            = 5     ,
 
@@ -1049,12 +1041,12 @@ class CayleyGraph:
                                         # diversity
                                         diversity_func                  = hamming_dist,
                                         diversity_weight                = 0.001 ,
-
-                                        # Technical:
+                                       
+                                        # Technical: 
                                         random_seed                     = 'Auto',
                                         verbose                         = 0     ,
                                         print_min_each_step_no          = 0     ,
-
+                                         
                                         free_memory_func                = free_memory, #lambda: None, # can be free_memory
                                       ):
         '''
@@ -1161,13 +1153,13 @@ class CayleyGraph:
         # r1-area of state_destination
         ##########################################################################################
 
-        if isinstance(radius_destination_neigbourhood, int):
+        if isinstance(radius_destination_neigbourhood, int): 
             dest_ahash, dest_dists = self.explode_moves_no_states( self.tensor_generators,
                                                                    start_states       = self.state_destination.reshape((-1,self.state_size)),
                                                                    initial_distance   = 0                                                   ,
                                                                    radius             = radius_destination_neigbourhood                     ,
                                                                    flag_skip_identity = False                                               )
-
+    
             dest_ahash, idx = dest_ahash.sort(stable=True)
             dest_dists      = dest_dists[idx]
         elif isinstance(radius_destination_neigbourhood, list) or isinstance(radius_destination_neigbourhood, tuple):
@@ -1202,7 +1194,7 @@ class CayleyGraph:
         for i_attempt in range(0, n_attempts_limit):
             if flag_found_destination:
                 break
-
+                
             if verbose>0:
                 print('>')
 
@@ -1260,7 +1252,7 @@ class CayleyGraph:
 
             if (self.device == torch.device("cuda")) : torch.cuda.synchronize()
 
-            free_memory_func()
+            free_memory_func()    
 
             ##########################################################################################
             # Main Loop over steps
@@ -1300,21 +1292,21 @@ class CayleyGraph:
                     #print(array_of_states_new.shape, array_of_states.shape)
                     prev_states_eval_new      = prev_states_eval     .flatten() if prev_states_eval is not None else torch.zeros_like(array_of_states_new[:,0], device=self.device, dtype=torch.float)
                     array_of_states_dists_new = array_of_states_dists.flatten() + n_step_size
-
-
+    
+    
                     array_of_states_new, hashes_array_of_states_new, _idxs = self.get_unique_states_2(array_of_states_new)
                     prev_states_eval_new      = prev_states_eval_new     [_idxs]
                     array_of_states_dists_new = array_of_states_dists_new[_idxs]
-
+                    
                     # filter states from last n_steps_to_ban_backtracking restricted to visit
                     mask = torch.ones(hashes_array_of_states_new.shape[0], dtype=torch.bool, device=self.device)
-
+    
                     if n_steps_to_ban_backtracking > 0:
                         mask                      &= ~torch.isin(hashes_array_of_states_new, hashes_previous_n_steps[hashes_previous_n_steps!=0], assume_unique=True)
-
+    
                     if do_check_stagnation and (states_bad_hashed!=0).sum()>0:
                         mask                      &= ~torch.isin(hashes_array_of_states_new, states_bad_hashed[states_bad_hashed!=0], assume_unique=True)
-
+    
                     _ms = mask.sum()
                     if _ms<mask.shape[0]:
                         array_of_states_new        = array_of_states_new       [mask,:]
@@ -1325,7 +1317,7 @@ class CayleyGraph:
                         if verbose>=1:
                             print('!', end='')
                         break
-
+                
                     # calc r2-moves from array_of_states_new and if intersected with dest_ahash - return all intersection points
                     if (radius_beam_neigbourhood > 0) and (i_step >= mode_bibfs_checks[0]) and (i_step%mode_bibfs_checks[1] == 0):
                         reach_hashes_tmp, reach_dists_tmp = self.search_neighbors_for_destination_reach(array_of_states_new                                 ,
@@ -1355,13 +1347,13 @@ class CayleyGraph:
                         estimate_min_on_ray   = torch.minimum(estimate_min_on_ray, estimate_min_on_chunk)
 
                         #estimations_for_new_states = (estimations_for_new_states.max()-estimations_for_new_states)#/(estimations_for_new_states.max()-estimations_for_new_states.min())
-
+        
                         # Take only "beam_width" of the best states (i.e. most nearest to destination according to the model estimate)
                         ### UPDATED - use softmax w temperature and naive sampling
-
+        
                         #prev_states_eval_new *= alpha_past_states_attenuation
                         #prev_states_eval_new += (1.-alpha_past_states_attenuation)*(estimations_for_new_states).log()
-
+        
                         #if temperature is not None:
                         #    estimations_for_new_states  = -torch.nn.functional.gumbel_softmax(-prev_states_eval_new.exp(), tau=temperature, hard=False)
                         #else:
@@ -1372,10 +1364,10 @@ class CayleyGraph:
                         # diversity added V1
                         #if diversity_weight is not None:
                         #    diversity_addon        = diversity_func( array_of_states_new, array_of_states_new[estimations_for_new_states.argmin(),:].view((1,-1)) ) * diversity_weight
-
+        
                         prev_states_eval_new      *= alpha_past_states_attenuation
                         prev_states_eval_new      += (1.-alpha_past_states_attenuation)*(estimations_for_new_states).log()
-
+        
                         estimations_for_new_states  = prev_states_eval_new.detach().clone() + torch.randn_like(prev_states_eval_new)*(prev_states_eval_new.max() - prev_states_eval_new.min())*temperature/2
 
                         # diversity added V2
@@ -1384,10 +1376,10 @@ class CayleyGraph:
 
                         estimations_cll            = hstack_if_not_None(estimations_cll           , estimations_for_new_states)
                         prev_states_eval_cll       = hstack_if_not_None(prev_states_eval_cll      , prev_states_eval_new      )
-
+                    
                     hashes_array_of_states_cll = hstack_if_not_None(hashes_array_of_states_cll, hashes_array_of_states_new)
                     array_of_states_dists_cll  = hstack_if_not_None(array_of_states_dists_cll , array_of_states_dists_new )
-
+                        
                 ### ITER ENDS HERE
                 free_memory_func()
 
@@ -1411,18 +1403,18 @@ class CayleyGraph:
                     # ok, this is a final distance
                     res_distance = (reach_df[0::2, 2]+reach_df[1::2, 2]).min() #i_step*n_step_size
                     if (verbose >= 10 ):
-                        print('Found destination state. ', 'i_step:', i_step, ' distance:', res_distance)
-
+                        print('Found destination state. ', 'i_step:', i_step, ' distance:', res_distance) 
+                    
                     break
 
                 ### GET ONLY NEEDED STATES AND VALUES FOR NEXT CYCLE
                 # ADDITIONAL SORT TO KEEP SHORTED DISTANCES
                 idx0 = torch.argsort( array_of_states_dists_cll, stable=True)
-
+                
                 idx  = torch.argsort(estimations_cll[idx0], stable=True)[:beam_width]
                 hashes_previous = hashes_array_of_states_cll[idx0][idx]
                 hashes_previous, idx2 = torch.sort(hashes_previous, stable=True)
-
+                
                 for j,m in enumerate(gen_indx):
                     array_of_states_new        = get_neighbors2( array_of_states, beam_moves[m:m+1,:] )
                     hashes_array_of_states_new = self.make_hashes(array_of_states_new)
@@ -1430,10 +1422,10 @@ class CayleyGraph:
                     array_of_states_cll        = vstack_if_not_None(array_of_states_cll,
                                                                     array_of_states_new[isin_via_searchsorted(hashes_array_of_states_new, hashes_previous), :])
                     #print('-', array_of_states_cll.shape)
-
+                
                 # get_unique_states_2 sort hashes, it must work smoothly
                 array_of_states, hashes_previous, idx3 = self.get_unique_states_2(array_of_states_cll)
-
+                
                 prev_states_eval                       = prev_states_eval_cll      [idx0][idx][idx2]
                 array_of_states_dists                  = array_of_states_dists_cll [idx0][idx][idx2]
 
@@ -1441,11 +1433,11 @@ class CayleyGraph:
                     dict_path[i_step] = hashes_previous.detach().cpu()
 
                 #print(idx0.shape, idx.shape, idx2.shape, idx3.shape)
-
+                
                 ### CONTINUE BASE CODE
-
+                
                 distance_minimums = torch.hstack([distance_minimums, prev_states_eval.min(),])
-
+                
                 if print_min_each_step_no>0 and i_step%print_min_each_step_no == 0:
                         print(f'Min on ray: {estimate_min_on_ray}')
 
@@ -1489,19 +1481,19 @@ class CayleyGraph:
                 t_estimate += (time.time() - t1)
                 t_all = (time.time() - t_all )
                 if verbose >= 1000:
-                    print(i_step,'i_step', 't_moves: %.5f, '%t_moves,  't_check: %.3f, '%t_check, 't_unique_els: %.3f, '%t_unique_els,
-                          't_estimate: %.5f, '%t_estimate,  't_all: %.3f, '%t_all,
+                    print(i_step,'i_step', 't_moves: %.5f, '%t_moves,  't_check: %.3f, '%t_check, 't_unique_els: %.3f, '%t_unique_els, 
+                          't_estimate: %.5f, '%t_estimate,  't_all: %.3f, '%t_all, 
                           array_of_states_new.shape, 'array_of_states_new.shape' )
                 elif verbose >= 10:
                     print(i_step,'i_step', 't_all: %.3f, '%t_all, array_of_states_new.shape, 'array_of_states_new.shape' )
 
         res_distance = res_distance.item() if res_distance is not None and flag_found_destination else i_step*n_step_size+(radius_destination_neigbourhood if isinstance(radius_destination_neigbourhood, int) else radius_destination_neigbourhood[0])+radius_beam_neigbourhood
 
-        dict_additional_data = {'random_seed':new_random_seed,}
+        dict_additional_data = {'random_seed':new_random_seed,}        
         if verbose >= 1:
             print();
             print('Search finished.', 'beam_width:', beam_width)
-            if flag_found_destination:
+            if flag_found_destination:    
                 print(res_distance, ' steps to destination state. Path found.')
             else:
                 print('Path not found.')
@@ -1523,15 +1515,15 @@ class CayleyGraph:
 #                     pass
 #         finally:
 #             free_memory()
-
+    
     ################################################################################################################################################################################################################################################################################
     def scramble_state(self, n_scrambles ):
         state_current = self.state_destination.detach().clone().reshape((-1))
         for k in range(n_scrambles):
             IX_move = torch.randint(0, self.n_generators, (1,), dtype = self.dtype_generators)#.item() # random moves indixes
-            state_current = state_current[ self.list_generators[IX_move] ]
+            state_current = state_current[ self.list_generators[IX_move] ] 
         return state_current
-
+    
     ################################################################################################################################################################################################################################################################################
     def random_walks(self, n_random_walk_length,  n_random_walks_to_generate):
         '''
@@ -1565,36 +1557,36 @@ class CayleyGraph:
         # Technical to make array[ IX_array] we need  actually to write array[ range(N), IX_array  ]
 
         # Main loop 
-
+        
         argnr = (torch.arange(n_random_walks_to_generate, dtype=torch.long, device=self.device)*torch.ones((n_random_walks_to_generate,self.tensor_generators.shape[1]), dtype=torch.long, device=self.device).T).T
 
         for i_step in range(1,n_random_walk_length):
             a,b,c = (i_step-1)*n_random_walks_to_generate, (i_step-0)*n_random_walks_to_generate, (i_step+1)*n_random_walks_to_generate
             #X[ b:c, : ] = X[ a:b, : ][argnr, self.tensor_generators[IX_moves[ a:b ],:]]
             X[ b:c, : ] = torch.gather( X[ a:b, : ], 1, self.tensor_generators[IX_moves[ a:b ],:] )
-
+            
         return X,y
-
+    
     ################################################################################################################################################################################################################################################################################
     def path_cleanup(self, dict_path):
         result_states                   = []
         result_hashes                   = []
-
+    
         radius_destination_neigbourhood = dict_path['radius_destination_neigbourhood']
         n_random_start_steps            = dict_path['n_random_start_steps'           ]
         state_start                     = dict_path['state_start'                    ]
         state_start_hash                = self.make_hashes(state_start)
-
+    
         i_step_max                      = dict_path['ended_at_step']
         from_beam_hashes                = dict_path[i_step_max].to(self.device)
-
+    
         from_dest_states                = self.state_destination.detach().clone()
         from_dest_hashes                = self.make_hashes(from_dest_states)
         from_dest_hashes_store          = []
         from_dest_states_store          = []
 
         # WE ARE ALWAYS IN SEARCH OF state_start_hash BECAUSE WE ARE MOVING BACKWARDS - FROM state_destination TO state_start
-
+    
         # step 1 - neighbourhood of state_destination - forward
         for j_f in range(0,radius_destination_neigbourhood+1):
             mask = isin_via_searchsorted( from_dest_hashes, state_start_hash )
@@ -1614,13 +1606,13 @@ class CayleyGraph:
                 from_beam_hashes, idx = from_beam_hashes.sort(stable=True)
                 from_beam_states      = from_beam_states[idx , :]
                 break
-
+    
         del from_dest_states_store
-
+        
         # step 2 - neighbourhood of state_destination - backward
         result_states.append( from_beam_states.detach().clone() )
         result_hashes.append( from_beam_hashes.detach().clone() )
-
+        
         if j_f > 0:
             # this means that no area of state_destination is precomputed - must go to step 3
             for j_b in range(j_f, 0, -1):
@@ -1630,71 +1622,71 @@ class CayleyGraph:
                 from_beam_hashes = from_beam_hashes[mask   ]
                 result_states.append( from_beam_states )
                 result_hashes.append( from_beam_hashes )
-
+    
         result_states = list(reversed( result_states ))
         result_hashes = list(reversed( result_hashes ))
-
+    
         # main cycle
         from_beam_states = result_states[-1].detach().clone()
-
+        
         for j_m in range(i_step_max-1, -1, -1):
             mask = isin_via_searchsorted( from_beam_hashes, state_start_hash )
             if mask.sum() > 0:
                 print(f'found {j_m}')
                 return result_states[:-1]+[state_start,], result_hashes[:-1]+[state_start_hash,]
-
+                
             from_beam_states, from_beam_hashes, _ = self.get_unique_states_2( get_neighbors2(from_beam_states, self.tensor_generators) )
             mask = torch.isin( from_beam_hashes, dict_path[j_m].to(self.device) )
             from_beam_states = from_beam_states[mask, :]
             from_beam_hashes = from_beam_hashes[mask   ]
             result_states.append( from_beam_states )
             result_hashes.append( from_beam_hashes )
-
+    
         # if not found for now - ok, let's search in sprouting steps
         for j_s in range(-n_random_start_steps+1, 0, 1):
             mask = isin_via_searchsorted( from_beam_hashes, state_start_hash )
             if mask.sum() > 0:
                 print(f'found {j_s}')
                 return result_states[:-1]+[state_start,], result_hashes[:-1]+[state_start_hash,]
-
+                
             from_beam_states, from_beam_hashes, _ = self.get_unique_states_2( get_neighbors2(from_beam_states, self.tensor_generators) )
             mask = torch.isin( from_beam_hashes, dict_path[j_s].to(self.device) )
             from_beam_states = from_beam_states[mask, :]
             from_beam_hashes = from_beam_hashes[mask   ]
             result_states.append( from_beam_states )
             result_hashes.append( from_beam_hashes )
-
+    
         from_beam_states, from_beam_hashes, _ = self.get_unique_states_2( get_neighbors2(from_beam_states, self.tensor_generators) )
-
+    
         mask = isin_via_searchsorted( from_beam_hashes, state_start_hash )
         assert mask.sum() > 0, 'Something went veeeeeeeeerrrrrry wrong((('
-
+        
         # neighbourhood of state_start
         result_states.append( state_start      )
         result_hashes.append( state_start_hash )
-
+        
         return result_states, result_hashes
-
+            
     ################################################################################################################################################################################################################################################################################
     def retractor_base(self, path_states, radius = 3):
         hashes, _ = self.explode_moves_no_states(perm_group_555.tensor_generators, start_states = torch.vstack( path_states ), radius=radius, initial_distance=0, flag_skip_identity=False)
         hashes, _ = hashes.sort(stable=True)
-
+    
         s  = path_states[-1]
         d  = path_states[ 0]
         sh = self.make_hashes( s )
         dh = self.make_hashes( d )
-
+    
         tmp_hashes = [sh,]
-
+    
         shp = None
-
+    
         for i in range(1,len(path_states)):
             mask = isin_via_searchsorted( sh, dh )
             if mask.sum() > 0:
                 print(f'found {i-1}')
                 break
-
+    
             s, shn, _ = self.get_unique_states_2( get_neighbors2(s, self.tensor_generators) )
             mask      =  isin_via_searchsorted( shn, hashes )
             mask     &= ~isin_via_searchsorted( shn, sh     )
@@ -1704,9 +1696,9 @@ class CayleyGraph:
             s   = s  [mask, :]
             sh  = shn[mask   ]
             tmp_hashes.append( sh )
-
+    
         assert isin_via_searchsorted( sh, dh ).any()
-
+    
         res_states = [d ,]
         res_hashes = [dh,]
         for j in range(len(tmp_hashes)-2,-1,-1):
@@ -1715,9 +1707,9 @@ class CayleyGraph:
             d        = d [mask, :]
             res_states.append( d        )
             res_hashes.append( dh[mask] )
-
+    
         return res_states, res_hashes
-
+    
     ################################################################################################################################################################################################################################################################################
     def retractor(self, path_states, radius = 3, max_steps = 1000):
         rs0, rh0 = self.retractor_base(path_states, radius=radius)
@@ -1738,68 +1730,68 @@ class CayleyGraph:
         if value_dict is None:
             if to_power is None:
                 to_power = 1.6
-
+                
         prms = []
         dsts = []
-
+        
         _prm = get_neighbors2(self.state_destination, self.tensor_generators)
-
+    
         _prm = torch.vstack([self.state_destination                                        , _prm                                                                      ,])
         _dst = torch.hstack([torch.tensor(0, dtype=self.dtype_for_dist, device=self.device), torch.ones_like(_prm[1:,0], dtype=self.dtype_for_dist, device=self.device),])
-
+    
         idx = torch.zeros_like(_dst, dtype=torch.bool)
-
+        
         for j in range(_prm.shape[1]):
             idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
-
+        
         _prm = _prm[idx, :]
         _dst = _dst[idx   ]
-
+    
         prms.append( _prm[0:1,:] )
         prms.append( _prm[1: ,:] )
-
+    
         dsts.append( _dst[0:1  ] )
         dsts.append( _dst[1:   ] )
-
+    
         for i in range(0, steps):
             #print(prms[-1].shape)
             ### 1
             _prm = get_neighbors2(prms[-1], self.tensor_generators)
-
+    
             _dst = torch.ones_like(_prm[:,0], dtype=self.dtype_for_dist, device=_dst.device)*(i+2)
-
+        
             idx = torch.zeros_like(_dst, dtype=torch.bool)
-
+            
             for j in range(_prm.shape[1]):
                 idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
-
+            
             _prm = _prm[idx, :]
             _dst = _dst[idx   ]
-
+    
             ### 2
             _prm = torch.vstack([torch.vstack(prms), _prm])
             _dst = torch.hstack([torch.hstack(dsts), _dst])
             idx  = torch.zeros_like(_dst, dtype=torch.bool)
-
+            
             for j in range(_prm.shape[1]):
                 idx[self.get_unique_states_2(_prm[:,j], flag_already_hashed=True)[2]] = True
-
+            
             _prm = _prm[idx, :][torch.vstack(prms).shape[0]:,:]
             _dst = _dst[idx   ][torch.hstack(dsts).shape[0]:  ]
-
+    
             if _prm.shape[0] == 0:
                 break
-
+        
             prms.append( _prm )
             dsts.append( _dst )
-
+    
         #return torch.vstack(prms), torch.hstack(dsts)
-
+    
         _prm = torch.vstack(prms)
         _dst = torch.hstack(dsts)
-
+    
         _vls = torch.ones( (_prm.shape[1],_prm.max()+1), dtype=torch.int64, device=self.device )*bad
-
+        
         for i in range(_prm.shape[0]):
             for j in range(_prm.shape[1]):
                 k = _prm[i,j].item()
@@ -1814,7 +1806,7 @@ class CayleyGraph:
                 self._vls += (_vls == k)*v
         else:
             self._vls = _vls
-
+    
         return _vls
     ################################################################################################################################################################################################################################################################################
     def group_data_0w(self, data):
@@ -1827,59 +1819,27 @@ class CayleyGraph:
 
         #if max_moves is None:
         #    max_moves = self._vls.max().item()
-
+            
         out_v = None
         out_i = None
         for AC in tensor_split_preprocessed(A, A_size_thresh):
             gd0A = self.group_data_0w(AC).to(torch.float)
             gd0B = self.group_data_0w(B ).to(torch.float)
-
+    
             # 3
             res  = (gd0A == 0).to(torch.float) @ (gd0B.T != 0).to(torch.float)
             for i in torch.unique(perm_group_444._vls.flatten()):#range(1,max_moves+1):
                 if i > 0:
                     res += (gd0A == i).to(torch.float) @ (gd0B.T != i).to(torch.float)
-
+    
             v, i = res.min(dim=1)
-
+            
             out_v = torch.hstack([out_v, v]) if out_v is not None else v
             out_i = torch.hstack([out_i, i]) if out_i is not None else i
-
+    
         return out_v, out_i
     ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
     ################################################################################################################################################################################################################################################################################
-
-    ##### Code below is for BFS and calculating growth function.
-    def _get_neighbors(self, states: torch.Tensor) -> torch.Tensor:
-       # TODO(fedimser): for binary strings represented by int64, add more efficient implementation.
-       return get_neighbors2(states, self.tensor_generators)
-
-    def bfs_growth(self, start_states: torch.Tensor) -> BfsGrowthResult:
-        """Finds distance from given set of states to all other reachable states."""
-        layer0_hashes =  torch.empty( (0,), dtype=self.dtype_for_hash )
-        layer1, layer1_hashes, _ = self.get_unique_states_2(start_states)
-        layer_sizes = [len(layer1)]
-
-        for i in range(1000000000):
-            layer2, layer2_hashes, _ = self.get_unique_states_2(self._get_neighbors(layer1))
-
-            # layer2 -= (layer0+layer1)
-            # Warning: hash collisions are not handled.
-            mask0 = ~torch.isin(layer2_hashes, layer0_hashes, assume_unique=True)
-            mask1 = ~torch.isin(layer2_hashes, layer1_hashes, assume_unique=True)
-            mask = mask0 & mask1
-            layer2 = layer2[mask]
-            layer2_hashes = layer2_hashes[mask]
-
-            if len(layer2) == 0:
-                break
-            layer_sizes.append(len(layer2))
-            layer1 = layer2
-            layer0_hashes, layer1_hashes = layer1_hashes, layer2_hashes
-
-        return BfsGrowthResult(layer_sizes=layer_sizes,
-                               diameter=len(layer_sizes),
-                               last_layer=layer1)
-
+    
