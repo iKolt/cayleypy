@@ -1856,13 +1856,15 @@ class CayleyGraph:
        # TODO(fedimser): for binary strings represented by int64, add more efficient implementation.
        return get_neighbors2(states, self.tensor_generators)
 
-    def bfs_growth(self, start_states: torch.Tensor) -> BfsGrowthResult:
+    def bfs_growth(self,
+                   start_states: torch.Tensor,
+                   max_layers : int = 1000000000) -> BfsGrowthResult:
         """Finds distance from given set of states to all other reachable states."""
         layer0_hashes =  torch.empty( (0,), dtype=self.dtype_for_hash )
         layer1, layer1_hashes, _ = self.get_unique_states_2(start_states)
         layer_sizes = [len(layer1)]
 
-        for i in range(1000000000):
+        for _ in range(1, max_layers):
             layer2, layer2_hashes, _ = self.get_unique_states_2(self._get_neighbors(layer1))
 
             # layer2 -= (layer0+layer1)

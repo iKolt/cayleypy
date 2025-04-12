@@ -13,10 +13,10 @@ def _lrx_permutations(n):
     return [list(range(1, n)) + [0], [n - 1] + list(range(0, n - 1)), [1, 0] + list(range(2, n))]
 
 
-def test_bfs_growth_lrx():
+def test_bfs_growth_lrx_coset():
     # Tests growth starting from string 00..0 11..1 for even N.
     test_cases = [
-        (1, [1, 1], {'10'}),
+        (2, [1, 1], {'10'}),
         (4, [1, 2, 3], {'1100', '1010', '0101'}),
         (6, [1, 2, 3, 4, 4, 3, 2, 1], {'010101'}),
         (8, [1, 2, 3, 4, 6, 8, 7, 9, 10, 9, 8, 2, 1], {'01010101'}),
@@ -46,7 +46,7 @@ def _top_spin_permutations(n):
     return [list(range(1, n)) + [0], [n - 1] + list(range(0, n - 1)), [3, 2, 1, 0] + list(range(4, n))]
 
 
-def test_bfs_growth_top_spin():
+def test_bfs_growth_top_spin_coset():
     # Tests growth starting from string 00..0 11..1 for even N.
     test_cases = [
         (4, [1, 3], {'1100', '0110', '1001'}),
@@ -68,3 +68,14 @@ def test_bfs_growth_top_spin():
         if n >= 6:
             assert sum(result.layer_sizes) == scipy.special.comb(n, n // 2, exact=True)
         assert _last_layer_to_str(result.last_layer) == expected_last_layer
+
+
+def test_bfs_growth_max_layers():
+    graph = CayleyGraph(_lrx_permutations(10))
+    start_states = torch.tensor([[0] * 5 + [1] * 5])
+    result1 = graph.bfs_growth(start_states, max_layers=5)
+    assert result1.layer_sizes == [1, 2, 3, 4, 6]
+    assert len(result1.last_layer) == 6
+    result2 = graph.bfs_growth(start_states, max_layers=7)
+    assert result2.layer_sizes == [1, 2, 3, 4, 6, 8, 10]
+    assert len(result2.last_layer) == 10
