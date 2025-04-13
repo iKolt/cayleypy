@@ -17,7 +17,7 @@ def setup_of_random(seed=None, border=2**32, verbose=0):
     """
     if seed is None:
         seed = torch.randint(-border,border+1,(1,)).item()
-    if verbose >= 0:
+    if verbose > 0:
         print(f'\nRandom seed used for experiments: {seed}\n')
     torch.manual_seed(seed)
     return seed

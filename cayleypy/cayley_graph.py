@@ -44,9 +44,11 @@ import torch
 import time
 import numpy  as np
 from dataclasses import dataclass
+from typing import Optional
 
 from .utils     import *
 from .predictor import *
+from .string_encoder import StringEncoder
 
 
 @dataclass
@@ -59,20 +61,21 @@ class CayleyGraph:
     """
     class to encapsulate all of permutation group in one place
     must help keeping reproducibility and dev speed
+
+    Args:
+        bit_encoding_width - if set, specifies that coset elements must be encoded in memory-efficient way, using this
+          much bits per element.
     """
     ################################################################################################################################################################################################################################################################################
     def __init__(self,
-
                  generators                ,
                  state_destination = 'Auto',
-
                  vec_hasher        = 'Auto',
-
                  to_power          = 1.6   ,
-
                  device            = 'Auto',
                  dtype             = 'Auto',
-                 random_seed       = 'Auto' ):
+                 random_seed       = 'Auto',
+                 bit_encoding_width : Optional[int] = None):
 
         # determine random seed
         if random_seed == 'Auto':
@@ -138,10 +141,17 @@ class CayleyGraph:
             self.state_destination = torch.tensor( state_destination, device=self.device, dtype = self.dtype).reshape(-1,self.state_size)
 
 
+        self.string_encoder : Optional[StringEncoder] = None
+        encoded_state_size: int = self.state_size
+        if bit_encoding_width is not None:
+            self.string_encoder = StringEncoder(code_width = bit_encoding_width, n =self.state_size)
+            self.encoded_generators = [self.string_encoder.implement_permutation(perm) for perm in generators]
+            encoded_state_size = self.string_encoder.encoded_length
+
         if vec_hasher == 'Auto':
             # Hash vector generation
             max_int =  int( (2**62) )
-            self.vec_hasher = torch.randint(-max_int, max_int+1, size=(self.state_size,), device=self.device, dtype=self.dtype_for_hash) #
+            self.vec_hasher = torch.randint(-max_int, max_int+1, size=(encoded_state_size,), device=self.device, dtype=self.dtype_for_hash) #
         elif not isinstance( vec_hasher , torch.Tensor):
             self.vec_hasher = torch.tensor( vec_hasher , device=self.device, dtype=self.dtype_for_hash )
         else:
@@ -158,6 +168,11 @@ class CayleyGraph:
     # bit of setup to get the fastest make_hashes - now it's possible always make_hashes_cpu_and_modern_gpu because of using float64 for self.dtype_for_hash
 
     def define_make_hashes(self):
+        # If states are already encoded by int64, can use identity function for hashing.
+        if self.string_encoder is not None and self.string_encoder.encoded_length == 1:
+            self.make_hashes = lambda x: x.reshape(-1)
+            return
+
         try:
             _ = self.make_hashes_cpu_and_modern_gpu( torch.vstack([self.state_destination,
                                                                    self.state_destination,]) )
@@ -1852,14 +1867,26 @@ class CayleyGraph:
     ################################################################################################################################################################################################################################################################################
 
     ##### Code below is for BFS and calculating growth function.
+    def _encode_states(self, states: torch.Tensor) -> torch.Tensor:
+        if self.string_encoder is not None:
+            return self.string_encoder.encode(states)
+        return states
+
+    def _decode_states(self, states: torch.Tensor) -> torch.Tensor:
+        if self.string_encoder is not None:
+            return self.string_encoder.decode(states)
+        return states
+
     def _get_neighbors(self, states: torch.Tensor) -> torch.Tensor:
-       # TODO(fedimser): for binary strings represented by int64, add more efficient implementation.
+       if self.string_encoder is not None:
+           return torch.vstack([f(states) for f in self.encoded_generators])
        return get_neighbors2(states, self.tensor_generators)
 
     def bfs_growth(self,
                    start_states: torch.Tensor,
                    max_layers : int = 1000000000) -> BfsGrowthResult:
         """Finds distance from given set of states to all other reachable states."""
+        start_states = self._encode_states(start_states)
         layer0_hashes =  torch.empty( (0,), dtype=self.dtype_for_hash )
         layer1, layer1_hashes, _ = self.get_unique_states_2(start_states)
         layer_sizes = [len(layer1)]
@@ -1883,5 +1910,5 @@ class CayleyGraph:
 
         return BfsGrowthResult(layer_sizes=layer_sizes,
                                diameter=len(layer_sizes),
-                               last_layer=layer1)
+                               last_layer=self._decode_states(layer1))
 
