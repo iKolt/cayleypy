@@ -45,11 +45,18 @@ import time
 import numpy  as np
 from dataclasses import dataclass
 from typing import Optional
+import jax
+import jax.numpy as jnp
+from jax import jit
+from torch.xpu import device
 
 from .utils     import *
 from .predictor import *
 from .string_encoder import StringEncoder
 
+# Type used for actual computations.
+import jaxlib
+BackendTensor = torch.Tensor | jaxlib.xla_extension.ArrayImpl
 
 @dataclass
 class BfsGrowthResult:
@@ -64,7 +71,7 @@ class CayleyGraph:
 
     Args:
         bit_encoding_width - if set, specifies that coset elements must be encoded in memory-efficient way, using this
-          much bits per element.
+          many bits per element.
     """
     ################################################################################################################################################################################################################################################################################
     def __init__(self,
@@ -73,9 +80,17 @@ class CayleyGraph:
                  vec_hasher        = 'Auto',
                  to_power          = 1.6   ,
                  device            = 'Auto',
+                 backend = 'torch', # Can be torch or jax.
                  dtype             = 'Auto',
                  random_seed       = 'Auto',
                  bit_encoding_width : Optional[int] = None):
+
+        # TODO: allow for 'auto' backend. It should use JAX if TPU is available.
+        # TODO: benchmark all 6 options (torch, jax) x (CPU, GPU, TPU).
+        assert backend in ['torch', 'jax']
+        if backend == 'jax':
+            jax.config.update("jax_enable_x64", True)
+        self.backend = backend
 
         # determine random seed
         if random_seed == 'Auto':
@@ -145,7 +160,7 @@ class CayleyGraph:
         encoded_state_size: int = self.state_size
         if bit_encoding_width is not None:
             self.string_encoder = StringEncoder(code_width = bit_encoding_width, n =self.state_size)
-            self.encoded_generators = [self.string_encoder.implement_permutation(perm) for perm in generators]
+            self.encoded_generators = [self.string_encoder.implement_permutation(perm, backend=self.backend) for perm in generators]
             encoded_state_size = self.string_encoder.encoded_length
 
         if vec_hasher == 'Auto':
@@ -161,7 +176,7 @@ class CayleyGraph:
 
         self.define_make_hashes()
 
-        self.manhatten_moves_matrix_count(to_power=to_power)
+        #self.manhatten_moves_matrix_count(to_power=to_power)
 
     ################################################################################################################################################################################################################################################################################
 
@@ -171,6 +186,10 @@ class CayleyGraph:
         # If states are already encoded by int64, can use identity function for hashing.
         if self.string_encoder is not None and self.string_encoder.encoded_length == 1:
             self.make_hashes = lambda x: x.reshape(-1)
+            return
+        if self.backend == 'jax':
+            vec_hasher_jax = jnp.array(self.vec_hasher.reshape(-1))
+            self.make_hashes = lambda states: states @ vec_hasher_jax
             return
 
         try:
@@ -210,7 +229,7 @@ class CayleyGraph:
                                                             # since old GPU hardware (before 2020: P100, T4) does not support integer matrix multiplication
 
     ################################################################################################################################################################################################################################################################################
-    def get_unique_states_2( self, states: torch.Tensor, flag_already_hashed : bool = False ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def get_unique_states_2( self, states: BackendTensor, flag_already_hashed : bool = False ) -> tuple[BackendTensor, BackendTensor, BackendTensor]:
         '''
         Return matrix with unique rows for input matrix "states" 
         I.e. duplicate rows are dropped.
@@ -223,16 +242,26 @@ class CayleyGraph:
 
         # Hashing rows of states matrix: 
         hashed = states if flag_already_hashed else self.make_hashes(states)
+        num_states = len(hashed)
 
-        # sort
-        hashed_sorted, idx = torch.sort(hashed, stable=True)
+        if self.backend == 'torch':
+            # sort
+            hashed_sorted, idx = torch.sort(hashed, stable=True)
 
-        # Mask initialization
-        mask = torch.ones(hashed_sorted.size(0), dtype=torch.bool, device=self.device)
+            # Mask initialization
+            mask = torch.ones(hashed_sorted.size(0), dtype=torch.bool, device=self.device)
 
-        # Mask main part:
-        if hashed_sorted.size(0) > 1:
-            mask[1:] = (hashed_sorted[1:] != hashed_sorted[:-1])
+            # Mask main part:
+            if num_states > 1:
+                mask[1:] = (hashed_sorted[1:] != hashed_sorted[:-1])
+        else:
+            assert self.backend == 'jax'
+            assert not flag_already_hashed
+            assert type(hashed) is jaxlib.xla_extension.ArrayImpl, "Got type: " + str(type(hashed))
+            num_states = len(hashed)
+            idx = jnp.argsort(hashed, stable=True)
+            hashed_sorted = hashed[idx]
+            mask = jnp.concatenate([jnp.array([True]), hashed_sorted[1:] != hashed_sorted[:-1]])
 
         # Update index
         IX1 = idx[mask]
@@ -1867,27 +1896,43 @@ class CayleyGraph:
     ################################################################################################################################################################################################################################################################################
 
     ##### Code below is for BFS and calculating growth function.
-    def _encode_states(self, states: torch.Tensor) -> torch.Tensor:
+    def _encode_states(self, states: any) -> BackendTensor:
+        states = torch.as_tensor(states, device=self.device)
         if self.string_encoder is not None:
-            return self.string_encoder.encode(states)
+            states = self.string_encoder.encode(states)
+        if self.backend == 'jax':
+            # TODO: use JAX device here.
+            states = jnp.array(states, dtype=np.int64)
         return states
 
-    def _decode_states(self, states: torch.Tensor) -> torch.Tensor:
+    def _decode_states(self, states: BackendTensor) -> torch.Tensor:
+        states = torch.as_tensor(states, device=self.device)
         if self.string_encoder is not None:
-            return self.string_encoder.decode(states)
+            states = self.string_encoder.decode(states)
         return states
 
-    def _get_neighbors(self, states: torch.Tensor) -> torch.Tensor:
+    def _get_neighbors(self, states: BackendTensor) -> BackendTensor:
        if self.string_encoder is not None:
-           return torch.vstack([f(states) for f in self.encoded_generators])
+           if self.backend == 'torch':
+               return torch.vstack([f(states) for f in self.encoded_generators])
+           else:
+               assert self.backend == 'jax'
+               return jnp.vstack([f(states) for f in self.encoded_generators])
        return get_neighbors2(states, self.tensor_generators)
 
     def bfs_growth(self,
                    start_states: torch.Tensor,
                    max_layers : int = 1000000000) -> BfsGrowthResult:
-        """Finds distance from given set of states to all other reachable states."""
+        """Finds distance from given set of states to all other reachable states.
+
+        Args:
+            start_states = None, # State(s) from which bfs is started.
+            max_layers: Maximal radius to compute.
+        """
         start_states = self._encode_states(start_states)
         layer0_hashes =  torch.empty( (0,), dtype=self.dtype_for_hash )
+        if self.backend == 'jax':
+            layer0_hashes = jnp.empty((0,), dtype=np.int64)
         layer1, layer1_hashes, _ = self.get_unique_states_2(start_states)
         layer_sizes = [len(layer1)]
 
@@ -1896,14 +1941,19 @@ class CayleyGraph:
 
             # layer2 -= (layer0+layer1)
             # Warning: hash collisions are not handled.
-            mask0 = ~torch.isin(layer2_hashes, layer0_hashes, assume_unique=True)
-            mask1 = ~torch.isin(layer2_hashes, layer1_hashes, assume_unique=True)
+            if self.backend == 'torch':
+                mask0 = ~torch.isin(layer2_hashes, layer0_hashes, assume_unique=True)
+                mask1 = ~torch.isin(layer2_hashes, layer1_hashes, assume_unique=True)
+            else:
+                mask0 = ~jnp.isin(layer2_hashes, layer0_hashes, assume_unique=True)
+                mask1 = ~jnp.isin(layer2_hashes, layer1_hashes, assume_unique=True)
             mask = mask0 & mask1
             layer2 = layer2[mask]
             layer2_hashes = layer2_hashes[mask]
 
             if len(layer2) == 0:
                 break
+            print("BFS STEP layer length=", len(layer2))
             layer_sizes.append(len(layer2))
             layer1 = layer2
             layer0_hashes, layer1_hashes = layer1_hashes, layer2_hashes

@@ -11,14 +11,14 @@ from cayleypy import CayleyGraph
 def _last_layer_to_str(layer):
     return set(''.join(str(int(x)) for x in state) for state in layer)
 
-
+# TODO: move to a factory that is part of the library.
 def _lrx_permutations(n):
     """Generates 3 permutations from S_N: left shift, right shift and swapping first two elements."""
     return [list(range(1, n)) + [0], [n - 1] + list(range(0, n - 1)), [1, 0] + list(range(2, n))]
 
 
-@pytest.mark.parametrize("bit_encoding", [False, True])
-def test_bfs_growth_lrx(bit_encoding: bool):
+@pytest.mark.parametrize("backend,bit_encoding", [("torch", False), ("torch", True), ("jax", True)])
+def test_bfs_growth_lrx(backend:str, bit_encoding: bool):
     # Tests growth starting from string 00..0 11..1 for even N.
     test_cases = [
         (2, [1, 1], {'10'}),
@@ -55,6 +55,12 @@ def test_bfs_growth_lrx_n40():
     result2 = graph2.bfs_growth(start_states, max_layers=5)
     assert result1.layer_sizes == result2.layer_sizes
 
+    # TODO: when implemented, add the test for JAX using generic permutation.
+
+    graph3 = CayleyGraph(_lrx_permutations(n), bit_encoding_width=6, backend="jax")
+    result3 = graph3.bfs_growth(start_states, max_layers=5)
+    assert result3.layer_sizes == result1.layer_sizes
+
 
 @pytest.mark.parametrize("bit_encoding_width", [None, 1])
 def test_bfs_growth_lrx_coset(bit_encoding_width):
@@ -85,6 +91,7 @@ def test_bfs_growth_lrx_coset(bit_encoding_width):
         assert _last_layer_to_str(result.last_layer) == expected_last_layer
 
 
+# TODO: move to a factory that is part of the library.
 def _top_spin_permutations(n):
     """Generates 3 permutations from S_N: left shift, right shift and reversing first 4 elements."""
     return [list(range(1, n)) + [0], [n - 1] + list(range(0, n - 1)), [3, 2, 1, 0] + list(range(4, n))]
@@ -120,10 +127,11 @@ BENCHMARK_RUN = os.getenv("BENCHMARK") == "1"
 
 
 @pytest.mark.skipif(not BENCHMARK_RUN, reason="benchmark")
-@pytest.mark.parametrize("benchmark_mode", ["baseline", "bit_encoded"])
-@pytest.mark.parametrize("n", [28])
+@pytest.mark.parametrize("benchmark_mode", ["baseline", "bit_encoded", "bit_encoded_jax"])
+@pytest.mark.parametrize("n", [10])
 def test_benchmark_top_spin(benchmark, benchmark_mode, n):
     start_states = torch.tensor([[0] * (n // 2) + [1] * (n // 2)])
-    bit_encoding_width = 1 if benchmark_mode == "bit_encoded" else None
-    graph = CayleyGraph(_lrx_permutations(n), bit_encoding_width=bit_encoding_width)
-    benchmark(lambda: graph.bfs_growth(start_states))
+    bit_encoding_width = 1 if "bit_encoded" in benchmark_mode else None
+    backend = "jax" if benchmark_mode=="bit_encoded_jax" else "torch"
+    graph = CayleyGraph(_lrx_permutations(n), bit_encoding_width=bit_encoding_width, backend=backend)
+    benchmark.pedantic(lambda: graph.bfs_growth(start_states), rounds=2)
