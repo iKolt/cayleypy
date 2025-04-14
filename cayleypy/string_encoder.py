@@ -1,11 +1,17 @@
 import math
 from typing import Callable, Sequence
 
+import numpy as np
 import torch
 
 # We are using int64, but avoid using the sign bit.
 CODEWORD_LENGTH = 63
 
+# TODO: define in common place (utils?)
+import jaxlib
+import jax.numpy as jnp
+import jax
+BackendTensor = torch.Tensor | jaxlib.xla_extension.ArrayImpl
 
 class StringEncoder:
     """Helper class to encode strings that represent elements of coset.
@@ -35,6 +41,7 @@ class StringEncoder:
 
         Input shape `(m, self.n)`. Output shape `(m, self.encoded_length)`.
         """
+        s = torch.as_tensor(s)
         assert len(s.shape) == 2
         assert s.shape[1] == self.n
         assert torch.min(s) >= 0, "Cannot encode negative values."
@@ -52,13 +59,15 @@ class StringEncoder:
 
         Input shape `(m, self.encoded_length)`. Output shape `(m, self.n)`.
         """
+        encoded = torch.as_tensor(encoded)
         orig = torch.zeros((encoded.shape[0], self.n), dtype=torch.int64)
         w, cl = self.w, CODEWORD_LENGTH
         for i in range(w * self.n):
             orig[:, i // w] |= ((encoded[:, i // cl] >> (i % cl)) & 1) << (i % w)
         return orig
 
-    def implement_permutation(self, p: Sequence[int]) -> Callable[[torch.Tensor], torch.Tensor]:
+    # TODO: type inside the callable should be BackendTensor!
+    def implement_permutation(self, p: Sequence[int], backend='torch') -> Callable:
         """Converts permutation to a function on encoded tensor implementing this permutation."""
         assert len(p) == self.n
         shift_to_mask: dict[tuple[int, int, int], float] = dict()
@@ -74,16 +83,32 @@ class StringEncoder:
                     shift_to_mask[key] = 0
                 shift_to_mask[key] |= (1 << (start_bit % CODEWORD_LENGTH))
 
-        lines = ["def f_(x):", " ans=torch.zeros_like(x)"]
+        exprs = [[] for _ in range(self.encoded_length)]
         for (start_cw_id, end_cw_id, shift), mask in shift_to_mask.items():
-            line = f" ans[:,{end_cw_id}] |= (x[:,{start_cw_id}] & 0b{mask:b})"
+            expr = f"(x[:,{start_cw_id}] & 0b{mask:b})"
             if shift > 0:
-                line += f"<<{shift}"
+                expr += f"<<{shift}"
             elif shift < 0:
-                line += f">>{-shift}"
-            lines.append(line)
-        lines += [" return ans"]
-        src = "\n".join(lines)
-        l = {}
-        exec(src, {"torch": torch}, l)
-        return l["f_"]
+                expr += f">>{-shift}"
+            exprs[end_cw_id].append(expr)
+        # For each column of output, compute expression for computing in form of bit-OR of some terms.
+        exprs = ["|".join(x) for x in exprs]
+
+        if backend == 'torch':
+            lines = ["def f_(x):", " ans=torch.zeros_like(x)"]
+            for i in range(self.encoded_length):
+                line = f" ans[:,{i}] = {exprs[i]}"
+                lines.append(line)
+            lines += [" return ans"]
+            src = "\n".join(lines)
+            l = {}
+            exec(src, {"torch": torch}, l)
+            return l["f_"]
+        else:
+            assert backend == 'jax'
+            expr = ",".join(exprs)
+            src = f"f_ = lambda x: jnp.stack([{expr}]).T"
+            l = {}
+            exec(src, {"jnp": jnp}, l)
+            return jax.jit(l["f_"])
+
