@@ -4,7 +4,6 @@ import os
 import pytest
 import scipy
 import torch
-from cryptography.hazmat.backends.openssl import backend
 
 from cayleypy import CayleyGraph
 
